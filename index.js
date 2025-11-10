@@ -32,9 +32,25 @@ async function run() {
     const vehiclesCollection = db.collection("vehicles");
 
     app.get("/vehicles", async (req, res) => {
-      const cursor = vehiclesCollection.find();
-      const result = await cursor.toArray();
-      res.send(result);
+      try {
+        const { category, location, sortBy, order,limit  } = req.query;
+        const query = {};
+        if (category) query.category = category;
+        if (location) query.location = { $regex: location, $options: "i" };
+        const sort = {};
+        if (sortBy) {
+          sort[sortBy] = order === "asc" ? 1 : -1;
+        }
+         let cursor = vehiclesCollection.find(query).sort(sort);
+         if (limit) {
+      cursor = cursor.limit(parseInt(limit)); 
+    }
+        const vehicles = await cursor.toArray();
+        res.status(200).json(vehicles);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch vehicles" });
+      }
     });
 
     app.get("/vehicles/:id", async (req, res) => {
@@ -52,15 +68,14 @@ async function run() {
 
     app.patch("/vehicles/:id", async (req, res) => {
       const id = req.params.id;
-       const updatedVehicle = req.body;
+      const updatedVehicle = req.body;
       const query = { _id: new ObjectId(id) };
       const update = {
-        $set:updatedVehicle
-      }
+        $set: updatedVehicle,
+      };
       const result = await vehiclesCollection.updateOne(query, update);
       res.send(result);
-     
-      })
+    });
 
     app.delete("/vehicles/:id", async (req, res) => {
       const id = req.params.id;
