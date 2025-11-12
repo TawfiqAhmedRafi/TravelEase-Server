@@ -34,7 +34,7 @@ async function run() {
 
     app.get("/vehicles", async (req, res) => {
       try {
-        const { category, location, sortBy, order, limit, email } = req.query;
+        const { category, location, sortBy, order, limit, email ,availability  } = req.query;
         const query = {};
         if (category) query.category = category;
         if (location) query.location = { $regex: location, $options: "i" };
@@ -44,6 +44,9 @@ async function run() {
         }
         if (email) {
           query.userEmail = email;
+        }
+        if( availability){
+          query.availability = availability;
         }
 
         const cursor = vehiclesCollection.find(query).sort(sort);
