@@ -30,10 +30,11 @@ async function run() {
 
     const db = client.db(process.env.DB_NAME);
     const vehiclesCollection = db.collection("vehicles");
+    const bookingsCollection = db.collection("bookings");
 
     app.get("/vehicles", async (req, res) => {
       try {
-        const { category, location, sortBy, order,limit  } = req.query;
+        const { category, location, sortBy, order, limit, email } = req.query;
         const query = {};
         if (category) query.category = category;
         if (location) query.location = { $regex: location, $options: "i" };
@@ -41,10 +42,14 @@ async function run() {
         if (sortBy) {
           sort[sortBy] = order === "asc" ? 1 : -1;
         }
-         let cursor = vehiclesCollection.find(query).sort(sort);
-         if (limit) {
-      cursor = cursor.limit(parseInt(limit)); 
-    }
+        if (email) {
+          query.userEmail = email;
+        }
+
+        const cursor = vehiclesCollection.find(query).sort(sort);
+        if (limit) {
+          cursor = cursor.limit(parseInt(limit));
+        }
         const vehicles = await cursor.toArray();
         res.status(200).json(vehicles);
       } catch (err) {
@@ -83,6 +88,93 @@ async function run() {
       const result = await vehiclesCollection.deleteOne(query);
       res.send(result);
     });
+
+    app.get("/bookings", async (req, res) => {
+      try {
+        const { email } = req.query;
+        const query = email ? { userEmail: email } : {};
+        const bookings = await bookingsCollection.find(query).toArray();
+        res.status(200).json(bookings);
+      } catch (err) {
+        console.error("Error fetching bookings:", err);
+        res.status(500).json({ error: "Failed to fetch bookings" });
+      }
+    });
+    app.post("/bookings", async (req, res) => {
+      try {
+        const { vehicleId, userEmail } = req.body;
+        if (!vehicleId || !userEmail) {
+          return res
+            .status(400)
+            .json({ error: "vehicleId and userEmail are required" });
+        }
+        const vehicleObjectId = new ObjectId(vehicleId);
+        const vehicle = await vehiclesCollection.findOne({
+          _id: vehicleObjectId,
+        });
+        if (!vehicle)
+          return res.status(404).json({ error: "Vehicle not found" });
+        if (vehicle.availability !== "Available") {
+          return res.status(400).json({ error: "Vehicle is not available" });
+        }
+        const newBooking = {
+          vehicleId: vehicle._id,
+          vehicleName: vehicle.vehicleName,
+          userEmail,
+          bookingDate: new Date(),
+          status: "Booked",
+        };
+        const bookingResult = await bookingsCollection.insertOne(newBooking);
+        await vehiclesCollection.updateOne(
+          { _id: vehicle._id },
+          { $set: { availability: "Booked" } }
+        );
+        res
+          .status(201)
+          .json({ message: "Booking successful", booking: bookingResult });
+      } catch (err) {
+        console.error("Error adding booking:", err);
+        res.status(500).json({ error: "Failed to add booking" });
+      }
+    });
+
+app.delete("/bookings", async (req, res) => {
+  try {
+    const { vehicleId, userEmail } = req.query;
+
+    if (!vehicleId || !userEmail) {
+      return res.status(400).json({ error: "vehicleId and userEmail are required" });
+    }
+
+    const vehicleObjectId = new ObjectId(vehicleId);
+
+   
+    const booking = await bookingsCollection.findOne({
+      vehicleId: vehicleObjectId,
+      userEmail,
+    });
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    
+    await bookingsCollection.deleteOne({ _id: booking._id });
+
+    
+    await vehiclesCollection.updateOne(
+      { _id: vehicleObjectId },
+      { $set: { availability: "Available" } }
+    );
+
+    res.status(200).json({ message: "Booking cancelled successfully" });
+  } catch (err) {
+    console.error("Error cancelling booking:", err);
+    res.status(500).json({ error: "Failed to cancel booking" });
+  }
+});
+
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
