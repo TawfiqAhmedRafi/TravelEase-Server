@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 require("dotenv").config();
+const cron = require("node-cron");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 3000;
@@ -127,43 +128,75 @@ async function run() {
         res.status(500).json({ error: "Failed to fetch bookings" });
       }
     });
-    app.post("/bookings", async (req, res) => {
-      try {
-        const { vehicleId, userEmail } = req.body;
-        if (!vehicleId || !userEmail) {
-          return res
-            .status(400)
-            .json({ error: "vehicleId and userEmail are required" });
-        }
-        const vehicleObjectId = new ObjectId(vehicleId);
-        const vehicle = await vehiclesCollection.findOne({
-          _id: vehicleObjectId,
-        });
-        if (!vehicle)
-          return res.status(404).json({ error: "Vehicle not found" });
-        if (vehicle.availability !== "Available") {
-          return res.status(400).json({ error: "Vehicle is not available" });
-        }
-        const newBooking = {
-          vehicleId: vehicle._id,
-          vehicleName: vehicle.vehicleName,
-          userEmail,
-          bookingDate: new Date(),
-          status: "Booked",
-        };
-        const bookingResult = await bookingsCollection.insertOne(newBooking);
-        await vehiclesCollection.updateOne(
-          { _id: vehicle._id },
-          { $set: { availability: "Booked" } }
-        );
-        res
-          .status(201)
-          .json({ message: "Booking successful", booking: bookingResult });
-      } catch (err) {
-        console.error("Error adding booking:", err);
-        res.status(500).json({ error: "Failed to add booking" });
-      }
-    });
+
+    cron.schedule("* * * * *", async () => {
+  const now = new Date();
+  try {
+    const expiredBookings = await bookingsCollection.find({ returnDate: { $lte: now }, status: "Booked" }).toArray();
+
+    for (const booking of expiredBookings) {
+      
+      await vehiclesCollection.updateOne(
+        { _id: booking.vehicleId },
+        { $set: { availability: "Available" } }
+      );
+
+      
+      await bookingsCollection.updateOne(
+        { _id: booking._id },
+        { $set: { status: "Completed" } }
+      );
+
+      console.log(`Booking ${booking._id} completed. Vehicle is now available.`);
+    }
+  } catch (err) {
+    console.error("Error in cron job:", err);
+  }
+});
+
+
+   app.post("/bookings", async (req, res) => {
+  try {
+    const { vehicleId, userEmail, bookFor } = req.body;
+
+    if (!vehicleId || !userEmail || !bookFor) {
+      return res.status(400).json({ error: "vehicleId, userEmail, and bookFor are required" });
+    }
+
+    const vehicleObjectId = new ObjectId(vehicleId);
+    const vehicle = await vehiclesCollection.findOne({ _id: vehicleObjectId });
+
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found" });
+    if (vehicle.availability !== "Available") {
+      return res.status(400).json({ error: "Vehicle is not available" });
+    }
+
+    const returnDate = new Date(Date.now() + bookFor * 24 * 60 * 60 * 1000); 
+
+    const newBooking = {
+      vehicleId: vehicle._id,
+      vehicleName: vehicle.vehicleName,
+      userEmail,
+      bookingDate: new Date(),
+      bookFor,       
+      returnDate,   
+      status: "Booked",
+    };
+
+    const bookingResult = await bookingsCollection.insertOne(newBooking);
+
+    
+    await vehiclesCollection.updateOne(
+      { _id: vehicle._id },
+      { $set: { availability: "Booked" } }
+    );
+
+    res.status(201).json({ message: "Booking successful", booking: bookingResult });
+  } catch (err) {
+    console.error("Error adding booking:", err);
+    res.status(500).json({ error: "Failed to add booking" });
+  }
+});
 
 app.delete("/bookings", async (req, res) => {
   try {
