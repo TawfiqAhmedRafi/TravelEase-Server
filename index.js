@@ -31,6 +31,23 @@ async function run() {
     const db = client.db(process.env.DB_NAME);
     const vehiclesCollection = db.collection("vehicles");
     const bookingsCollection = db.collection("bookings");
+    const usersCollection = db.collection("users");
+
+    app.post('/users', async(req, res)=>{
+      const newUser = req.body;
+
+      const email= req.body.email;
+      const query = {email: email};
+      const existingUser = await usersCollection.findOne(query);
+      if(existingUser){
+        return res.send({message: 'User already exists'});
+      }
+      else{
+        const result = await usersCollection.insertOne(newUser);
+      res.send(result);
+      }
+      
+    })
 
     app.get("/vehicles", async (req, res) => {
       try {
