@@ -277,6 +277,22 @@ app.delete("/bookings", async (req, res) => {
     res.status(500).json({ error: "Failed to cancel booking" });
   }
 });
+// Temporary route to convert all prices to numbers
+app.patch("/fix-prices", async (req, res) => {
+  try {
+    const vehicles = await vehiclesCollection.find({}).toArray();
+    for (const vehicle of vehicles) {
+      await vehiclesCollection.updateOne(
+        { _id: vehicle._id },
+        { $set: { pricePerDay: Number(vehicle.pricePerDay) } }
+      );
+    }
+    res.status(200).json({ message: "All vehicle prices converted to numbers" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fix prices" });
+  }
+});
 
 
     //await client.db("admin").command({ ping: 1 });
