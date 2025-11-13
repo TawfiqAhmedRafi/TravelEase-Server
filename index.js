@@ -94,7 +94,7 @@ async function run() {
     });
 
     app.post("/vehicles", async (req, res) => {
-      const newVehicle = req.body;
+      const newVehicle ={...req.body, createdAt: new Date()}; ;
       const result = await vehiclesCollection.insertOne(newVehicle);
       res.send(result);
     });
@@ -151,6 +151,50 @@ async function run() {
     }
   } catch (err) {
     console.error("Error in cron job:", err);
+  }
+});
+// Get bookings with vehicle info
+app.get("/my-bookings-details", async (req, res) => {
+  try {
+    const { email } = req.query; 
+    if (!email) return res.status(400).json({ error: "Email is required" });
+
+    const bookingsWithVehicle = await bookingsCollection
+      .aggregate([
+        { $match: { userEmail: email } }, 
+        {
+          $lookup: {
+            from: "vehicles",           
+            localField: "vehicleId",    
+            foreignField: "_id",        
+            as: "vehicleInfo",          
+          },
+        },
+        { $unwind: "$vehicleInfo" },     
+        {
+          $project: {
+            vehicleId: 1,
+            vehicleName: 1,
+            userEmail: 1, // Booking user's email
+            bookingDate: 1,
+            returnDate: 1,
+            status: 1,
+            bookFor: 1,
+            "vehicleInfo.coverImage": 1,
+            "vehicleInfo.owner": 1,
+            "vehicleInfo.userEmail": 1, // <-- vehicle owner's email
+            "vehicleInfo.category": 1,
+            "vehicleInfo.fuelType": 1,
+            "vehicleInfo.seatCapacity": 1,
+          },
+        },
+      ])
+      .toArray();
+
+    res.status(200).json(bookingsWithVehicle);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch bookings with vehicle info" });
   }
 });
 
