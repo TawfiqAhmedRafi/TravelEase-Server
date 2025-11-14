@@ -129,19 +129,18 @@ async function run() {
       }
     });
 
-    cron.schedule("* * * * *", async () => {
+   
+app.post("/run-cron", async (req, res) => {
   const now = new Date();
   try {
     const expiredBookings = await bookingsCollection.find({ returnDate: { $lte: now }, status: "Booked" }).toArray();
 
     for (const booking of expiredBookings) {
-      
       await vehiclesCollection.updateOne(
         { _id: booking.vehicleId },
         { $set: { availability: "Available" } }
       );
 
-      
       await bookingsCollection.updateOne(
         { _id: booking._id },
         { $set: { status: "Completed" } }
@@ -149,10 +148,14 @@ async function run() {
 
       console.log(`Booking ${booking._id} completed. Vehicle is now available.`);
     }
+
+    res.status(200).json({ message: "Cron logic executed successfully" });
   } catch (err) {
-    console.error("Error in cron job:", err);
+    console.error("Error in cron logic:", err);
+    res.status(500).json({ error: "Cron logic failed" });
   }
 });
+
 // Get bookings with vehicle info
 app.get("/my-bookings-details", async (req, res) => {
   try {
