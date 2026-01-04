@@ -55,7 +55,7 @@ app.get("/", (req, res) => {
 
 async function run() {
   try {
-    await client.connect();
+    //await client.connect();
 
     const db = client.db(process.env.DB_NAME);
     const vehiclesCollection = db.collection("vehicles");
@@ -636,7 +636,154 @@ async function run() {
         res.status(500).send({ message: "Failed to fetch reviews" });
       }
     });
+    // admin dashboard
+    app.get("/bookings-over-time", async (req, res) => {
+      try {
+        const now = new Date();
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(now.getDate() - 6);
 
+        const pipeline = [
+          {
+            $match: {
+              bookingDate: { $gte: sevenDaysAgo, $lte: now },
+            },
+          },
+          {
+            $group: {
+              _id: {
+                $dateToString: { format: "%Y-%m-%d", date: "$bookingDate" },
+              },
+              completed: {
+                $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] },
+              },
+              pending: {
+                $sum: { $cond: [{ $eq: ["$status", "Booked"] }, 1, 0] },
+              },
+            },
+          },
+          { $sort: { _id: 1 } },
+          {
+            $project: {
+              date: "$_id",
+              completed: 1,
+              pending: 1,
+              _id: 0,
+            },
+          },
+        ];
+
+        const result = await bookingsCollection.aggregate(pipeline).toArray();
+
+        res.status(200).json(result);
+      } catch (err) {
+        console.error("Error fetching bookings over time:", err);
+        res.status(500).json({ error: "Failed to fetch bookings over time" });
+      }
+    });
+    app.get("/admin-stats", async (req, res) => {
+      try {
+        const totalVehicles = await vehiclesCollection.countDocuments();
+        const totalBookings = await bookingsCollection.countDocuments();
+
+        const completedBookings = await bookingsCollection.countDocuments({
+          status: "Completed",
+        });
+        const pendingBookings = await bookingsCollection.countDocuments({
+          status: "Booked",
+        });
+        console.log(completedBookings, pendingBookings);
+        res.status(200).json({
+          totalVehicles,
+          totalBookings,
+          completedBookings,
+          pendingBookings,
+        });
+      } catch (err) {
+        console.error("Error fetching stats:", err);
+        res.status(500).json({ error: "Failed to fetch stats" });
+      }
+    });
+
+    app.get("/vehicle-availability", async (req, res) => {
+      try {
+        const totalVehicles = await vehiclesCollection.countDocuments();
+        const availableVehicles = await vehiclesCollection.countDocuments({
+          availability: "Available",
+        });
+        const bookedVehicles = await vehiclesCollection.countDocuments({
+          availability: "Booked",
+        });
+
+        res.status(200).json([
+          { name: "Available", value: availableVehicles },
+          { name: "Booked", value: bookedVehicles },
+        ]);
+      } catch (err) {
+        console.error("Error fetching vehicle availability:", err);
+        res.status(500).json({ error: "Failed to fetch vehicle availability" });
+      }
+    });
+    // user dashboard
+    app.get("/dashboard/user", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+
+        const bookings = await bookingsCollection
+          .find({ userEmail: email })
+          .toArray();
+
+        const totalBookings = bookings.length;
+        const ongoing = bookings.filter((b) => b.status === "Booked").length;
+        const completed = bookings.filter(
+          (b) => b.status === "Completed"
+        ).length;
+
+        const myVehiclesCount = await vehiclesCollection.countDocuments({
+          userEmail: email,
+        });
+
+        const bookingsSummary = [
+          { _id: "booked", count: ongoing },
+          { _id: "completed", count: completed },
+        ];
+
+        const categoriesSummary = await bookingsCollection
+          .aggregate([
+            { $match: { userEmail: email } },
+            {
+              $lookup: {
+                from: "vehicles",
+                localField: "vehicleId",
+                foreignField: "_id",
+                as: "vehicleInfo",
+              },
+            },
+            { $unwind: "$vehicleInfo" },
+            {
+              $group: {
+                _id: "$vehicleInfo.category",
+                count: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray();
+
+        res.status(200).json({
+          summary: {
+            totalBookings,
+            ongoing,
+            completed,
+            myVehicles: myVehiclesCount,
+          },
+          bookingsSummary,
+          categoriesSummary,
+        });
+      } catch (err) {
+        console.error("Error fetching user dashboard:", err);
+        res.status(500).json({ message: "Failed to fetch user dashboard" });
+      }
+    });
     app.get("/latest-reviews", async (req, res) => {
       try {
         const reviews = await reviewsCollection
@@ -651,7 +798,7 @@ async function run() {
       }
     });
 
-    await client.db("admin").command({ ping: 1 });
+    //await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
