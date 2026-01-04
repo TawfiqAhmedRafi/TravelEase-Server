@@ -63,20 +63,136 @@ async function run() {
     const usersCollection = db.collection("users");
     const reviewsCollection = db.collection("reviews");
 
-    app.post("/users", async (req, res) => {
-      const newUser = req.body;
+    // admin verify
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+      next();
+    };
 
-      const email = req.body.email;
-      const query = { email: email };
-      const existingUser = await usersCollection.findOne(query);
-      if (existingUser) {
-        return res.send({ message: "User already exists" });
-      } else {
-        const result = await usersCollection.insertOne(newUser);
-        res.send(result);
+    app.get("/users", verifyFBToken, async (req, res) => {
+      try {
+        const { page = 1, limit = 10, email, all = "false" } = req.query;
+
+        const pageNumber = Number(page);
+        const limitNumber = Number(limit);
+
+        const query = {};
+        if (email) query.email = email;
+
+        const totalUsers = await usersCollection.countDocuments(query);
+
+        let cursor = usersCollection.find(query);
+
+        // Apply pagination ONLY if not requesting all
+        if (all !== "true") {
+          cursor = cursor
+            .skip((pageNumber - 1) * limitNumber)
+            .limit(limitNumber);
+        }
+
+        const users = await cursor.toArray();
+
+        res.send({
+          users,
+          page: all === "true" ? 1 : pageNumber,
+          limit: all === "true" ? totalUsers : limitNumber,
+          totalUsers,
+          totalPages: all === "true" ? 1 : Math.ceil(totalUsers / limitNumber),
+        });
+      } catch (error) {
+        console.error("Get users error:", error);
+        res.status(500).send({ message: "Failed to fetch users" });
       }
     });
+    app.post("/users", async (req, res) => {
+      try {
+        const { email, name, image } = req.body;
 
+        if (!email) {
+          return res.status(400).send({ message: "Email is required" });
+        }
+
+        const existingUser = await usersCollection.findOne({ email });
+        if (existingUser) {
+          return res.send(existingUser);
+        }
+
+        const newUser = {
+          email,
+          name: name || "",
+          image: image || "",
+          role: "user",
+          createdAt: new Date(),
+        };
+
+        const result = await usersCollection.insertOne(newUser);
+
+        res.send(newUser);
+      } catch (error) {
+        console.error("Failed to create user:", error);
+        res.status(500).send({ message: "Failed to create user" });
+      }
+    });
+    app.get("/user-role", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+
+        const user = await usersCollection.findOne({ email });
+
+        if (!user) {
+          return res.status(404).send({ message: "User not found" });
+        }
+
+        res.send({ role: user.role });
+      } catch (error) {
+        console.error("Get user role error:", error);
+        res.status(500).send({ message: "Failed to fetch user role" });
+      }
+    });
+    app.patch(
+      "/users/:id/role",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { role, isBanned } = req.body;
+          const updateData = {};
+
+          if (role) {
+            const allowedRoles = ["admin", "user"];
+            if (!allowedRoles.includes(role)) {
+              return res.status(400).send({ message: "Invalid role" });
+            }
+            updateData.role = role;
+          }
+          if (typeof isBanned === "boolean") {
+            updateData.isBanned = isBanned;
+          }
+
+          if (Object.keys(updateData).length === 0) {
+            return res
+              .status(400)
+              .send({ message: "No valid fields to update" });
+          }
+
+          const result = await usersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+          );
+
+          res.send(result);
+        } catch (error) {
+          console.error("Admin role patch error:", error);
+          res.status(500).send({ message: "Failed to update user" });
+        }
+      }
+    );
     app.get("/vehicles", async (req, res) => {
       try {
         const {
@@ -131,7 +247,7 @@ async function run() {
     });
 
     app.get("/latest-vehicles", async (req, res) => {
-      const cursor = vehiclesCollection.find().sort({ createdAt: -1 }).limit(6);
+      const cursor = vehiclesCollection.find().sort({ createdAt: -1 }).limit(8);
       const result = await cursor.toArray();
       res.send(result);
     });
@@ -427,21 +543,101 @@ async function run() {
         res.status(500).send({ message: "Failed to load statistics" });
       }
     });
+    app.get("/featured-owners", async (req, res) => {
+      try {
+        const topOwners = await vehiclesCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$userEmail", // group by owner
+                totalVehicles: { $sum: 1 }, // count number of vehicles
+                vehicleCategory: { $first: "$category" }, // pick one vehicle category
+              },
+            },
+            {
+              $lookup: {
+                from: "users",
+                localField: "_id",
+                foreignField: "email",
+                as: "ownerDetails",
+              },
+            },
+            { $unwind: "$ownerDetails" },
+            {
+              $project: {
+                _id: 0,
+                ownerName: "$ownerDetails.name",
+                ownerImage: "$ownerDetails.image",
+                totalVehicles: 1,
+                vehicleCategory: 1,
+              },
+            },
+            { $sort: { totalVehicles: -1 } }, // sort by number of vehicles descending
+            { $limit: 8 }, // top 10 owners
+          ])
+          .toArray();
+
+        res.status(200).json(topOwners);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
     // review API
     app.post("/reviews", verifyFBToken, async (req, res) => {
       try {
+        const email = req.decoded_email;
+
+        const user = await usersCollection.findOne({ email });
+
+        if (!user) {
+          return res.status(404).send({ message: "User not found" });
+        }
+
         const review = {
           ...req.body,
+          email,
+          userImage: user.image || "",
           createdAt: new Date(),
         };
 
         const result = await reviewsCollection.insertOne(review);
         res.send(result);
       } catch (error) {
+        console.error("Failed to post review:", error);
         res.status(500).send({ message: "Failed to post review" });
       }
     });
-    app.get("/reviews", async (req, res) => {
+    app.get("/reviews", verifyFBToken, verifyAdmin, async (req, res) => {
+      try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 8;
+        const skip = (page - 1) * limit;
+
+        const totalReviews = await reviewsCollection.countDocuments();
+
+        const reviews = await reviewsCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        res.send({
+          page,
+          limit,
+          totalPages: Math.ceil(totalReviews / limit),
+          totalReviews,
+          reviews,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to fetch reviews" });
+      }
+    });
+
+    app.get("/latest-reviews", async (req, res) => {
       try {
         const reviews = await reviewsCollection
           .find()
